@@ -2,8 +2,8 @@ name: Daily Security Pipeline
 
 on:
   schedule:
-    - cron: '0 7 * * *'
-  workflow_dispatch:
+    - cron: '0 7 * * *'   # Tous les jours à 7h UTC
+  workflow_dispatch:       # Lancement manuel autorisé
 
 permissions:
   security-events: write
@@ -32,7 +32,6 @@ jobs:
           if [ -s osv.sarif ]; then
             echo "sarif_exists=true" >> "$GITHUB_OUTPUT"
           else
-            echo "SARIF vide ou absent, rien à uploader"
             echo "sarif_exists=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -52,10 +51,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Run Semgrep scan
+      - name: Run Semgrep scan (extended rules)
         id: semgrep-scan
         run: |
-          semgrep scan --config auto --sarif > semgrep.sarif || true
+          semgrep scan --config "p/java p/security-audit p/secrets" --sarif > semgrep.sarif || true
           if [ -s semgrep.sarif ]; then
             echo "sarif_exists=true" >> "$GITHUB_OUTPUT"
           else
