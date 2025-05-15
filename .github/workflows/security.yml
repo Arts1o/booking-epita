@@ -2,8 +2,8 @@ name: Daily Security Pipeline
 
 on:
   schedule:
-    - cron: '0 7 * * *'   # Tous les jours à 7h UTC
-  workflow_dispatch:       # Permet le lancement manuel
+    - cron: '0 7 * * *'
+  workflow_dispatch:
 
 permissions:
   security-events: write
@@ -26,9 +26,18 @@ jobs:
           sudo mv osv-scanner-linux-amd64 /usr/local/bin/osv-scanner
 
       - name: Run OSV Scanner
-        run: osv-scanner --source-directory=. --format=sarif --output=osv.sarif || touch osv.sarif
+        id: osv-scan
+        run: |
+          osv-scanner --source-directory=. --format=sarif --output=osv.sarif || true
+          if [ -s osv.sarif ]; then
+            echo "sarif_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "SARIF vide ou absent, rien à uploader"
+            echo "sarif_exists=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Upload SARIF report
+      - name: Upload SARIF report (if exists and not empty)
+        if: steps.osv-scan.outputs.sarif_exists == 'true'
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: osv.sarif
@@ -44,9 +53,17 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Run Semgrep scan
-        run: semgrep scan --config auto --sarif > semgrep.sarif || touch semgrep.sarif
+        id: semgrep-scan
+        run: |
+          semgrep scan --config auto --sarif > semgrep.sarif || true
+          if [ -s semgrep.sarif ]; then
+            echo "sarif_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "sarif_exists=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Upload SARIF report
+      - name: Upload SARIF report (if exists and not empty)
+        if: steps.semgrep-scan.outputs.sarif_exists == 'true'
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep.sarif
