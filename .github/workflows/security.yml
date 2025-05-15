@@ -1,104 +1,46 @@
 name: Daily Security Pipeline
+
 on:
   schedule:
-    - cron: '0 7 * * *'
-  workflow_dispatch:
-permissions:
-  security-events: write
-  contents: read
-jobs:
-  dependencies-analysis:
-    name: Check Dependencies with OSV
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-      - name: Install OSV Scanner
-        run: |
-          curl -LO https://github.com/google/osv-scanner/releases/latest/download/osv-scanner-linux-amd64
-          chmod +x osv-scanner-linux-amd64
-          sudo mv osv-scanner-linux-amd64 /usr/local/bin/osv-scanner
-      - name: Run OSV Scanner
-        id: osv-scan
-        run: |
-          # Version simplifiée pour éviter les erreurs
-          osv-scanner --source-directory=. --format=sarif --output=osv.sarif || true
-          if [ -s osv.sarif ]; then
-            echo "sarif_exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "sarif_exists=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Upload SARIF report (if exists and not empty)
-        if: steps.osv-scan.outputs.sarif_exists == 'true'
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: osv.sarif
-          category: osv-scanner
+    - cron: '0 0 * * *'  # Daily at midnight
+  push:
+    branches: [main]
 
-  source-code-analysis:
-    name: Static Analysis with Semgrep
+jobs:
+  DependenciesAnalysis:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Install OSV Scanner v2.0.2
+      run: |
+        curl -L -o osv-scanner https://github.com/google/osv-scanner/releases/download/v2.0.2/osv-scanner_linux_amd64
+        chmod +x osv-scanner
+        sudo mv osv-scanner /usr/local/bin/osv-scanner
+
+    - name: Run OSV Scanner
+      run: osv-scanner --format sarif --output osv-scan-results.sarif app/
+      continue-on-error: true
+    - name: Upload OSV SARIF report to Security Dashboard
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ./osv-scan-results.sarif
+
+  SemgrepAnalysis:
     runs-on: ubuntu-latest
     container:
       image: returntocorp/semgrep
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-      - name: Create custom Semgrep rules
-        run: |
-          mkdir -p semgrep-rules
-          
-          # Règle pour détecter les vulnérabilités XSS
-          cat > semgrep-rules/xss.yaml << 'EOF'
-          rules:
-            - id: custom-xss-detection
-              pattern: String.format(..., $INPUT)
-              message: "Potential XSS vulnerability detected"
-              severity: ERROR
-              languages: [java]
-          EOF
-          
-          # Règle pour détecter l'injection SQL
-          cat > semgrep-rules/sql-injection.yaml << 'EOF'
-          rules:
-            - id: custom-sql-injection
-              pattern: |
-                "SELECT * FROM ... WHERE ... = '" + $VAR + "'"
-              message: "SQL Injection vulnerability detected"
-              severity: ERROR
-              languages: [java]
-          EOF
-          
-          # Règle simple pour détecter les chemins de fichiers
-          cat > semgrep-rules/path-traversal.yaml << 'EOF'
-          rules:
-            - id: path-traversal
-              pattern: new File("..." + $PATH)
-              message: "Path traversal vulnerability detected"
-              severity: ERROR
-              languages: [java]
-          EOF
-          
-          ls -la semgrep-rules/
-      - name: Run Semgrep scan with simplified options
-        id: semgrep-scan
-        run: |
-          # Configuration simplifiée pour éviter les erreurs
-          semgrep scan \
-            --config p/java \
-            --config semgrep-rules/ \
-            --sarif > semgrep.sarif || true
-          
-          if [ -s semgrep.sarif ]; then
-            echo "sarif_exists=true" >> "$GITHUB_OUTPUT"
-            # Afficher les résultats simplifiés
-            echo "==== Vulnérabilités détectées ===="
-            semgrep scan --config p/java --config semgrep-rules/ || true
-          else
-            echo "sarif_exists=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Upload SARIF report (if exists and not empty)
-        if: steps.semgrep-scan.outputs.sarif_exists == 'true'
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: semgrep.sarif
-          category: semgrep
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Run Semgrep with Java ruleset
+      run: semgrep --config p/java --sarif --output semgrep-results.sarif
+
+    - name: Upload Semgrep SARIF to Security Dashboard
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: semgrep-results.sarif
