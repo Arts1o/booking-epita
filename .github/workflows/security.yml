@@ -1,69 +1,158 @@
 name: Daily Security Pipeline
-
 on:
   schedule:
     - cron: '0 7 * * *'
   workflow_dispatch:
-
 permissions:
   security-events: write
   contents: read
-
 jobs:
-
   dependencies-analysis:
     name: Check Dependencies with OSV
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-
       - name: Install OSV Scanner
         run: |
           curl -LO https://github.com/google/osv-scanner/releases/latest/download/osv-scanner-linux-amd64
           chmod +x osv-scanner-linux-amd64
           sudo mv osv-scanner-linux-amd64 /usr/local/bin/osv-scanner
-
       - name: Run OSV Scanner
         id: osv-scan
         run: |
-          osv-scanner --source-directory=. --format=sarif --output=osv.sarif || true
+          # Améliorations: recursive, scan-mode=all pour une détection plus approfondie
+          osv-scanner --recursive --scan-mode=all --source-directory=. --format=sarif --output=osv.sarif || true
           if [ -s osv.sarif ]; then
             echo "sarif_exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "sarif_exists=false" >> "$GITHUB_OUTPUT"
           fi
-
       - name: Upload SARIF report (if exists and not empty)
         if: steps.osv-scan.outputs.sarif_exists == 'true'
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: osv.sarif
-
   source-code-analysis:
     name: Static Analysis with Semgrep
     runs-on: ubuntu-latest
     container:
       image: returntocorp/semgrep
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-
-      - name: Run Semgrep scan (extended rules)
+      - name: Create custom Semgrep rules
+        run: |
+          mkdir -p semgrep-rules
+          
+          # Règle pour détecter les vulnérabilités XSS
+          cat > semgrep-rules/xss.yaml << 'EOF'
+          rules:
+            - id: custom-xss-detection
+              patterns:
+                - pattern: String.format(..., $INPUT)
+              message: "Potential XSS vulnerability detected"
+              severity: ERROR
+              languages: [java]
+          EOF
+          
+          # Règle pour détecter les injections de format
+          cat > semgrep-rules/format-injection.yaml << 'EOF'
+          rules:
+            - id: string-format-injection
+              pattern: String.format($FORMAT, ...)
+              message: "String format potentially vulnerable to injection"
+              severity: ERROR
+              languages: [java]
+          EOF
+          
+          # Règle pour détecter les injections SQL
+          cat > semgrep-rules/sql-injection.yaml << 'EOF'
+          rules:
+            - id: custom-sql-injection
+              patterns:
+                - pattern: |
+                    "... $INPUT ..."
+                  inside:
+                    pattern: |
+                      $STMT.executeQuery(...)
+              message: "SQL Injection vulnerability detected"
+              severity: ERROR
+              languages: [java]
+          EOF
+          
+          # Règle pour détecter les chemins de fichiers non sécurisés
+          cat > semgrep-rules/path-traversal.yaml << 'EOF'
+          rules:
+            - id: path-traversal
+              patterns:
+                - pattern: new File("..." + $PATH + "...")
+              message: "Path traversal vulnerability detected"
+              severity: ERROR
+              languages: [java]
+          EOF
+          
+          # Règle pour détecter l'utilisation non sécurisée de Random
+          cat > semgrep-rules/insecure-random.yaml << 'EOF'
+          rules:
+            - id: insecure-random
+              patterns:
+                - pattern: new Random(...)
+              message: "Insecure random number generation detected, use SecureRandom instead"
+              severity: ERROR
+              languages: [java]
+          EOF
+          
+          # Règle pour détecter les commandes système non sécurisées
+          cat > semgrep-rules/command-injection.yaml << 'EOF'
+          rules:
+            - id: command-injection
+              patterns:
+                - pattern: Runtime.getRuntime().exec("..." + $CMD + "...")
+              message: "Command injection vulnerability detected"
+              severity: ERROR
+              languages: [java]
+          EOF
+          
+          ls -la semgrep-rules/
+      - name: Run Semgrep scan with enhanced options
         id: semgrep-scan
         run: |
-          semgrep scan --config "p/java p/security-audit p/r2c-security-audit p/secrets" --sarif > semgrep.sarif || true
+          semgrep scan \
+            --config "p/java" \
+            --config "p/security-audit" \
+            --config "p/secrets" \
+            --config "semgrep-rules/" \
+            --disable-version-check \
+            --severity INFO \
+            --include "*.java" \
+            --verbose \
+            --sarif > semgrep.sarif || true
+          
           if [ -s semgrep.sarif ]; then
             echo "sarif_exists=true" >> "$GITHUB_OUTPUT"
+            # Afficher les résultats pour le debug
+            semgrep scan --config "p/java" --config "p/security-audit" --config "p/secrets" --config "semgrep-rules/" --disable-version-check
           else
             echo "sarif_exists=false" >> "$GITHUB_OUTPUT"
           fi
-
       - name: Upload SARIF report (if exists and not empty)
         if: steps.semgrep-scan.outputs.sarif_exists == 'true'
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep.sarif
-
+  codeql-analysis:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: java
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v2
