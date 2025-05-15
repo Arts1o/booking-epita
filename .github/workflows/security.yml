@@ -2,8 +2,12 @@ name: Daily Security Pipeline
 
 on:
   schedule:
-    - cron: '0 7 * * *'        # Tous les jours à 7h UTC
-  workflow_dispatch:           # Lance manuellement depuis GitHub
+    - cron: '0 7 * * *'  # Tous les jours à 7h UTC
+  workflow_dispatch:      # Lancement manuel depuis GitHub
+
+permissions:
+  security-events: write
+  contents: read
 
 jobs:
 
