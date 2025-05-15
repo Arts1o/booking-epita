@@ -2,8 +2,8 @@ name: Daily Security Pipeline
 
 on:
   schedule:
-    - cron: '0 7 * * *'   # Tous les jours à 7h UTC
-  workflow_dispatch:       # Lancement manuel autorisé
+    - cron: '0 7 * * *'
+  workflow_dispatch:
 
 permissions:
   security-events: write
@@ -54,7 +54,7 @@ jobs:
       - name: Run Semgrep scan (extended rules)
         id: semgrep-scan
         run: |
-          semgrep scan --config "p/java p/security-audit p/secrets" --sarif > semgrep.sarif || true
+          semgrep scan --config "p/java p/security-audit p/r2c-security-audit p/secrets" --sarif > semgrep.sarif || true
           if [ -s semgrep.sarif ]; then
             echo "sarif_exists=true" >> "$GITHUB_OUTPUT"
           else
